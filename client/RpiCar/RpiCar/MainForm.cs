@@ -20,28 +20,12 @@ namespace RpiCar
 {
     public partial class MainForm : Form
     {
-        class Detection
-        {
-            public double Confidence;
-            public string Class;
-            public int Left;
-            public int Top;
-            public int Width;
-            public int Height;
-            public DateTime Timestamp;
-            public int Camera;
-
-            public override string ToString()
-            {
-                return $"{Confidence} {Class} {Left} {Top} {Width} {Height}";
-            }
-        }
-
-        private HttpClient HttpClient;
-        private string URL;
-        private List<Detection> Detections;
-        private List<PictureBox[]> PictureBoxes;
-        private bool SwitchCams;
+        private IEnumerable<Detection> Detections;
+        private IEnumerable<Sign> Signs;
+        private Dictionary<string, PictureBox[]> Displays;
+        private Dictionary<string, CameraParameters> CamParams;
+        private RpiCar RpiCar;
+        private Dictionary<string, Bitmap> SignImages;
 
         public MainForm()
         {
@@ -51,10 +35,55 @@ namespace RpiCar
 
         public void InitializeApp()
         {
-            HttpClient = new HttpClient();
-            PictureBoxes = new List<PictureBox[]>();
-            PictureBoxes.Add(new PictureBox[] { pictureBoxLeft, pictureBoxFrontCamera });
-            PictureBoxes.Add(new PictureBox[] { pictureBoxRight, pictureBoxRearCamera });
+            Displays = new Dictionary<string, PictureBox[]>();
+            CamParams = new Dictionary<string, CameraParameters>();
+
+            Displays["left"] = new PictureBox[] { pictureBoxLeftMosaicCamera, pictureBoxLeftCamera };
+            CamParams["left"] = new CameraParameters
+            {
+                Fx = 698.4,
+                //Fx = 724.0,
+                Fy = 698.9,
+                Cx = 325.5,
+                Cy = 259.9,
+                Skew = 0
+            };
+
+            Displays["right"] = new PictureBox[] { pictureBoxRightMosaicCamera, pictureBoxRightCamera };
+            CamParams["right"] = new CameraParameters
+            {
+                Fx = 705.23549,
+                //Fx = 724.0,
+                Fy = 706.47721,
+                Cx = 317.47812,
+                Cy = 268.77874,
+                Skew = 0
+            };
+
+            chartTopView.ChartAreas[0].AxisX.Minimum = -1.5;
+            chartTopView.ChartAreas[0].AxisX.Maximum = 1.5;
+
+            chartTopView.ChartAreas[0].AxisY.Minimum = -0.5;
+            chartTopView.ChartAreas[0].AxisY.Maximum = 1.5;
+
+            SignImages = new Dictionary<string, Bitmap>();
+            SignImages["0"] = new Bitmap("stop.png");
+            SignImages["2"] = new Bitmap("priority.png");
+            SignImages["1"] = new Bitmap("roundabout.png");
+            SignImages["car"] = new Bitmap("car.png");
+        }
+
+        private string MapCamIdToString(int id)
+        {
+            switch (id)
+            {
+                case 0:
+                    return "left";
+                case 1:
+                    return "right";
+                default:
+                    throw new ArgumentException("Should not happen!");
+            }
         }
 
         private async void MainForm_Load(object sender, EventArgs e)
@@ -64,31 +93,25 @@ namespace RpiCar
             {
                 try
                 {
-                    var urlForm = new URLForm();
-                    urlForm.URL = Properties.Settings.Default.URL;
+                    var ipForm = new IPForm();
+                    ipForm.IPAdress = Properties.Settings.Default.URL;
 
-                    var dialogResult = urlForm.ShowDialog();
+                    var dialogResult = ipForm.ShowDialog();
                     if (dialogResult != DialogResult.OK)
                     {
                         Close();
                         break;
                     }
 
-                    using (var response = await HttpClient.GetAsync(urlForm.URL))
-                    {
-                        if (response != null)
-                        {
-                            var jsonString = await response.Content.ReadAsStringAsync();
-                            var json = JObject.Parse(jsonString);
+                    RpiCar = new RpiCar(ipForm.IPAdress, 5000, 0.14, CamParams["left"], CamParams["right"]);
+                    succ = await RpiCar.IsAliveAsync();
 
-                            if (json["message"].ToString() == "OK")
-                            {
-                                succ = true;
-                                Properties.Settings.Default.URL = urlForm.URL;
-                                Properties.Settings.Default.Save();
-                            }
-                        }
+                    if (succ)
+                    {
+                        Properties.Settings.Default.URL = ipForm.IPAdress;
+                        Properties.Settings.Default.Save();
                     }
+
                 }
                 catch
                 {
@@ -96,275 +119,149 @@ namespace RpiCar
                 }
             } while (!succ);
 
-            URL = Properties.Settings.Default.URL;
-            timerVideoFeed.Enabled = true;
+            timerVideoFeedLeft.Enabled = true;
+            timerVideoFeedRight.Enabled = true;
             timerDetections.Enabled = true;
             timerInformation.Enabled = true;
         }
 
         private async void TimerVideoFeed_Tick(object sender, EventArgs e)
         {
-            timerVideoFeed.Enabled = false;
-            var count = 2;
-            var feeds = new Bitmap[count];
+            var timer = (Timer)sender;
 
-            for (int i = 0; i < count; i++)
+            timer.Enabled = false;
+
+            var id = int.Parse(timer.Tag.ToString());
+            var device = (CameraDevice)id;
+
+            var img = await RpiCar.GetCameraFeedAsync(device);
+
+            switch (device)
             {
-                var uri = $"{URL}/car/video_feed/{i}";
-                var img = await LoadImage(new Uri(uri));
-
-                var index = SwitchCams ? (count - 1) - i : i;
-                PictureBoxes[index][0].Image = img;
-                PictureBoxes[index][1].Image = img;
-
-                feeds[i] = img;
+                case CameraDevice.LEFT:
+                    pictureBoxLeftCamera.Image = img;
+                    pictureBoxLeftMosaicCamera.Image = img;
+                    break;
+                case CameraDevice.RIGHT:
+                    pictureBoxRightCamera.Image = img;
+                    pictureBoxRightMosaicCamera.Image = img;
+                    break;
             }
 
-
-            timerVideoFeed.Enabled = true;
+            timer.Enabled = true;
         }
 
         private async void TimerInformation_Tick(object sender, EventArgs e)
         {
             timerInformation.Enabled = false;
 
-            var uri = $"{URL}/car/information";
+            // TODO LATER
+            var carState = await RpiCar.GetCarStateAsync();
 
-            var json = await IssueRequest(uri);
-            if (json != null)
+            if (carState == null)
             {
-                try
-                {
-                    //var pose = json["arexx"]["pose"].ToObject<float[]>();
-                    //var newPt = new DataPoint(pose[0], pose[1]);
-                    //var points = chartMap.Series[0].Points;
-
-                    //if (points.Count > 0)
-                    //{
-                    //    if (!newPt.Equals(points[points.Count - 1]))
-                    //    {
-                    //        points.Add(newPt);
-                    //    }
-                    //}
-                    //else
-                    //{
-                    //    points.Add(newPt);
-                    //}
-                }
-                catch
-                {
-
-                }
+                return;
             }
+
+            toolStripStatusLabelRearDistance.Text = $"Rear clearance: {carState.RearDistance} cm";
+            toolStripStatusLabelLeftLine.Text = $"Left line: {carState.LeftBlackLine}";
+            toolStripStatusLabelRightLine.Text = $"Right line: {carState.RightBlackLine}";
+            toolStripStatusLabelGear.Text = $"Gear: {carState.Gear}";
 
             timerInformation.Enabled = true;
         }
 
-        public async Task<Bitmap> LoadImage(Uri uri)
-        {
-            BitmapImage bitmapImage = new BitmapImage();
-
-            try
-            {
-                using (var response = await HttpClient.GetAsync(uri))
-                {
-                    response.EnsureSuccessStatusCode();
-
-                    using (var inputStream = await response.Content.ReadAsStreamAsync())
-                    {
-                        bitmapImage.BeginInit();
-                        bitmapImage.StreamSource = inputStream;
-                        bitmapImage.EndInit();
-                    }
-                }
-
-                return BitmapImage2Bitmap(bitmapImage);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Failed to load the image: {0}", ex.Message);
-            }
-
-            return null;
-        }
-
-        private Bitmap BitmapImage2Bitmap(BitmapImage bitmapImage)
-        {
-            using (MemoryStream outStream = new MemoryStream())
-            {
-                BitmapEncoder enc = new BmpBitmapEncoder();
-                enc.Frames.Add(BitmapFrame.Create(bitmapImage));
-                enc.Save(outStream);
-                Bitmap bitmap = new Bitmap(outStream);
-
-                return new Bitmap(bitmap);
-            }
-        }
-
-        private async Task<JObject> IssueRequest(string uri)
-        {
-            try
-            {
-                using (var response = await HttpClient.GetAsync(uri))
-                {
-                    if (response != null)
-                    {
-                        var jsonString = await response.Content.ReadAsStringAsync();
-                        var json = JObject.Parse(jsonString);
-
-                        return json;
-                    }
-                }
-            }
-            catch
-            {
-
-            }
-
-            return null;
-        }
-
         private async void MainForm_KeyDown(object sender, KeyEventArgs e)
         {
-            KeyDown -= MainForm_KeyDown;
-
-            var cmd = string.Empty;
+            //KeyDown -= MainForm_KeyDown;
 
             switch (e.KeyData)
             {
                 case Keys.W:
-                    cmd = "forward";
+                    await RpiCar.Move(MoveCommand.FORWARD);
                     break;
                 case Keys.S:
-                    cmd = "backward";
+                    await RpiCar.Move(MoveCommand.Backward);
                     break;
                 case Keys.A:
-                    cmd = "left";
+                    await RpiCar.Move(MoveCommand.Left);
                     break;
                 case Keys.D:
-                    cmd = "right";
+                    await RpiCar.Move(MoveCommand.Right);
+                    break;
+                case Keys.T:
+                    await RpiCar.TrackAsync();
                     break;
             }
 
-            if (cmd != string.Empty)
-            {
-                try
-                {
-                    var json = JObject.Parse($"{{'direction':'{cmd}'}}");
-                    var uri = $"{URL}/car/move";
-                    var content = new StringContent(json.ToString(), Encoding.UTF8, "application/json");
-                    var response = await HttpClient.PostAsync(uri, content);
-                }
-                catch (Exception exc)
-                {
-
-                }
-            }
-
-            KeyDown += MainForm_KeyDown;
+            //KeyDown += MainForm_KeyDown;
         }
 
         private async void ToolStripButtonReset_Click(object sender, EventArgs e)
         {
-            try
-            {
-                var uri = $"{URL}/car/reset";
-                var content = new StringContent("{}", Encoding.UTF8, "application/json");
-                var response = await HttpClient.PostAsync(uri, content);
-
-                var jsonResponse = await response.Content.ReadAsStringAsync();
-                var json = JObject.Parse(jsonResponse);
-                richTextBoxLog.AppendText(json.ToString());
-            }
-            catch (Exception exc)
-            {
-
-            }
+            await RpiCar.ResetAsync();
         }
 
-        private async void SendGearCommand(string cmd)
+        private async void ToolStripButtonGearUp_Click(object sender, EventArgs e)
         {
-            try
-            {
-                var json = JObject.Parse($"{{'gear':'{cmd}'}}");
-                var uri = $"{URL}/car/gear";
-                var content = new StringContent(json.ToString(), Encoding.UTF8, "application/json");
-                var response = await HttpClient.PostAsync(uri, content);
-
-                var jsonResponse = await response.Content.ReadAsStringAsync();
-                json = JObject.Parse(jsonResponse);
-                richTextBoxLog.AppendText(json.ToString());
-            }
-            catch (Exception exc)
-            {
-
-            }
+            await RpiCar.ChangeGearAsync(GearCommand.Up);
         }
 
-        private void ToolStripButtonGearUp_Click(object sender, EventArgs e)
+        private async void ToolStripButton4_Click(object sender, EventArgs e)
         {
-            SendGearCommand("gear_up");
-        }
-
-        private void ToolStripButton4_Click(object sender, EventArgs e)
-        {
-            SendGearCommand("gear_down");
+            await RpiCar.ChangeGearAsync(GearCommand.Down);
         }
 
         private async void TimerDetections_Tick(object sender, EventArgs e)
         {
             timerDetections.Enabled = false;
 
-            var uri = $"{URL}/car/detections";
+            Detections = await RpiCar.GetDetectionsAsync();
+            Signs = RpiCar.DetectionsToWorldCoords(Detections);
 
-            var json = await IssueRequest(uri);
-            if (json != null)
+            chartTopView.Series["Signs"].Points.Clear();
+            chartTopView.Images.Clear();
+            chartTopView.Annotations.Clear();
+
+            InsertInTopView(0, 0, SignImages["car"]);
+
+            foreach (var sign in Signs)
             {
-                var camDetections = (JArray)json["detections"];
-                var list = new List<Detection>();
-                try
-                {
-                    for (int i = 0; i < camDetections.Count; i++)
-                    {
-                        var camDetection = camDetections[i];
-                        foreach (var detection in camDetection)
-                        {
-                            list.Add(new Detection
-                            {
-                                Confidence = (double)detection[0],
-                                Class = ((int)detection[1]).ToString(),
-                                Left = (int)detection[2][0],
-                                Top = (int)detection[2][1],
-                                Width = (int)detection[2][2],
-                                Height = (int)detection[2][3],
-                                Timestamp = DateTime.Now,
-                                Camera = i
-                            });
-                        }
-                    }
-                }
-                catch
-                {
-
-                }
-
-                Detections = list;
-                //richTextBoxLog.AppendText(json.ToString());
+                InsertInTopView(sign.X, sign.Y, SignImages[sign.Name]);
             }
 
             timerDetections.Enabled = true;
         }
 
+        private void InsertInTopView(double x, double y, Bitmap img)
+        {
+            var id = chartTopView.Series["Signs"].Points.Count;
+            var dataPoint = new DataPoint(x, y);
+            chartTopView.Series["Signs"].Points.Add(dataPoint);
+            var namedImg = new NamedImage($"sign_{id}", img);
+            chartTopView.Images.Add(namedImg);
 
+            ImageAnnotation ia = new ImageAnnotation()
+            {
+                AnchorDataPoint = dataPoint,
+            };
+
+            ia.Image = namedImg.Name;
+            ia.AllowMoving = false;
+            chartTopView.Annotations.Add(ia);
+        }
 
         private void ToolStripButton3_Click(object sender, EventArgs e)
         {
-            SwitchCams = !SwitchCams;
+            var tmp = Displays["right"];
+            Displays["right"] = Displays["left"];
+            Displays["left"] = tmp;
         }
 
         private void PictureBox_Paint(object sender, PaintEventArgs e)
         {
             var dets = Detections;
+            var signs = Signs;
             var pictureBox = (PictureBox)sender;
 
             if (dets == null || pictureBox.Image == null)
@@ -372,21 +269,15 @@ namespace RpiCar
                 return;
             }
 
-            var pictureBoxIndex = PictureBoxes.FindIndex(x => x.FirstOrDefault(y => y == pictureBox) != null);
-
             var xRatio = 1.0 * pictureBox.Width / pictureBox.Image.Width;
             var yRatio = 1.0 * pictureBox.Height / pictureBox.Image.Height;
 
-            foreach (var det in dets)
+            var detsForThisPictureBox = dets.Where(x => Displays[MapCamIdToString(x.Camera)].Contains(pictureBox));
+
+            foreach (var det in detsForThisPictureBox)
             {
                 var camId = det.Camera;
                 var className = det.Class;
-
-                if (pictureBoxIndex != camId)
-                {
-                    continue;
-                }
-
 
                 var x = det.Left * xRatio;
                 var y = det.Top * yRatio;
@@ -395,46 +286,20 @@ namespace RpiCar
 
                 e.Graphics.DrawRectangle(Pens.Red, new Rectangle((int)x, (int)y, (int)width, (int)height));
 
-                var detectionOnSecondCam = dets.FirstOrDefault(detection => detection.Class == className && camId != detection.Camera);
-                if (detectionOnSecondCam == null)
+                var sign = signs.FirstOrDefault(s => s.Name == det.Class);
+                if (sign == null)
                 {
                     continue;
                 }
 
-                double k1, k2, n1, n2;
-
-                GetLineEquationDetection(det, out k1, out n1);
-                GetLineEquationDetection(detectionOnSecondCam, out k2, out n2);
-
-                var determinant = k2 - k1;
-                if (determinant != 0)
-                {
-                    var spaceX = (n2 - n1) / determinant;
-                    var spaceY = k1 * spaceX + n1;
-                    var dist = Math.Sqrt(spaceX * spaceX + spaceY * spaceY) * 100;
-
-                    e.Graphics.DrawString($"{dist.ToString("0.00")} cm", DefaultFont, Brushes.Blue, (int)x - 10, (int)y - 10);
-                }
-
+                var dist = Math.Sqrt(sign.X * sign.X + sign.Y * sign.Y) * 100;
+                e.Graphics.DrawString($"{dist.ToString("0.00")} cm", DefaultFont, Brushes.Blue, (int)x - 15, (int)y - 15);
             }
         }
 
-        private void GetLineEquationDetection(Detection det, out double k, out double n)
+        private async void toolStripButton2_Click(object sender, EventArgs e)
         {
-            // Angle of View ( horizontally) = 34 Degrees
-            var horizontalAngleOfViewDeg = 33.0;
-            var horizontalAngleOfView = horizontalAngleOfViewDeg * Math.PI / 180;
-            // Distance between two cameras = 8 centimeters
-            var distanceBetweenCameras = 0.08;
-            // Image width is 640
-            var imgWidth = 640;
-            // Center of detection
-            var centerX = det.Left + det.Width / 2;
-
-            var objAngle = horizontalAngleOfView / imgWidth * centerX - horizontalAngleOfView / 2;
-
-            n = det.Camera == 0 ? -distanceBetweenCameras / 2 : distanceBetweenCameras / 2;
-            k = Math.Tan(objAngle);
+            await RpiCar.TrackAsync();
         }
     }
 }

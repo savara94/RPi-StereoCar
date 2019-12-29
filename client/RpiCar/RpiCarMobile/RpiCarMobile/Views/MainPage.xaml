@@ -1,0 +1,58 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<TabbedPage xmlns="http://xamarin.com/schemas/2014/forms"
+            xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+            xmlns:d="http://xamarin.com/schemas/2014/forms/design"
+            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+            mc:Ignorable="d"
+            xmlns:views="clr-namespace:RpiCarMobile.Views"
+            x:Class="RpiCarMobile.Views.MainPage">
+
+    <TabbedPage.Children>
+        <NavigationPage Title="Overview">
+            <x:Arguments>
+                <views:StreamPage>
+                    <NavigationPage.HasNavigationBar>
+                        <OnPlatform x:TypeArguments="x:Boolean">
+                            <On Platform="Android" Value="False"></On>
+                        </OnPlatform>
+                    </NavigationPage.HasNavigationBar>
+                </views:StreamPage>
+            </x:Arguments>
+        </NavigationPage>
+        <NavigationPage Title="Left camera">
+            <x:Arguments>
+                <views:ConfigurationPage>
+                    <NavigationPage.HasNavigationBar>
+                        <OnPlatform x:TypeArguments="x:Boolean">
+                            <On Platform="Android" Value="False"></On>
+                        </OnPlatform>
+                    </NavigationPage.HasNavigationBar>
+                </views:ConfigurationPage>
+            </x:Arguments>
+        </NavigationPage>
+        <NavigationPage Title="Right camera">
+            <x:Arguments>
+                <views:ConfigurationPage>
+                    <NavigationPage.HasNavigationBar>
+                        <OnPlatform x:TypeArguments="x:Boolean">
+                            <On Platform="Android" Value="False"></On>
+                        </OnPlatform>
+                    </NavigationPage.HasNavigationBar>
+                </views:ConfigurationPage>
+            </x:Arguments>
+        </NavigationPage>
+
+        <NavigationPage Title="Top view">
+            <x:Arguments>
+                <views:TopViewPage>
+                    <NavigationPage.HasNavigationBar>
+                        <OnPlatform x:TypeArguments="x:Boolean">
+                            <On Platform="Android" Value="False"></On>
+                        </OnPlatform>
+                    </NavigationPage.HasNavigationBar>
+                </views:TopViewPage>
+            </x:Arguments>
+        </NavigationPage>
+    </TabbedPage.Children>
+    
+</TabbedPage>

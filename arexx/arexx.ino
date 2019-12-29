@@ -1,6 +1,7 @@
+#include <AARLineTracking.h>
 #include <AARMotor.h>
 
-uint8_t Speed = 100;
+uint8_t Speed = 150;
 uint8_t EchoPin = 8;
 uint8_t TrigPin = 4;
 uint16_t Time_Echo_us = 0;
@@ -8,6 +9,7 @@ uint16_t Len_mm_X100 = 0;
 uint16_t Len_Integer = 0; //
 uint16_t Len_Fraction = 0;
 uint8_t Lag = 0;
+uint8_t Tracking = 0;
 
 volatile int16_t RightRevolutions = 0;
 volatile int16_t LeftRevolutions = 0;
@@ -16,8 +18,11 @@ uint32_t LastLeftMillis = 0;
 uint32_t LastRightMillis = 0;
 int8_t RightIncrement = 0;
 int8_t LeftIncrement = 0;
+uint8_t LeftLineSensor = 0;
+uint8_t RightLineSensor = 0;
 
 AARMotorClass AarMotor;
+AARLineTrackingClass LineTracking;
 
 void pciSetup(byte pin)
 {
@@ -52,6 +57,7 @@ ISR (PCINT1_vect) // handle pin change interrupt for A0 to A5 here
 void setup() { 
   // Initialize AAR motor
   AarMotor.Init(Speed);
+  LineTracking.Init(&AarMotor);
   // Initialize serial port
   Serial.begin(9600);
   // Initialize pins for ultrasonic sensor
@@ -68,10 +74,14 @@ void calculateDistance() {
   digitalWrite(TrigPin, HIGH);
   delayMicroseconds(50);
   digitalWrite(TrigPin, LOW);
-  Time_Echo_us = pulseIn(EchoPin, HIGH);
+  Time_Echo_us = pulseIn(EchoPin, HIGH, 10000);
   Len_mm_X100 = (Time_Echo_us * 34) / 2;
   Len_Integer = Len_mm_X100 / 100;
   Len_Fraction = Len_mm_X100 % 100;
+}
+
+void calculateLineSensors(){
+  LineTracking.Track(0);
 }
 
 void printInfo(){
@@ -87,6 +97,11 @@ void printInfo(){
   Serial.print(';');
   // Print speed
   Serial.print(Speed, DEC);
+  Serial.print(';');
+  // Print line sensors
+  Serial.print(LineTracking.SensorDataLeft(), DEC);
+  Serial.print(';');
+  Serial.print(LineTracking.SensorDataRight(), DEC);
   Serial.println();
 }
 
@@ -133,12 +148,39 @@ void loop() {
       case 'E':
         Speed = Speed == 100 ? Speed : Speed - 25;
         break;
+      case 't':
+        Tracking = !Tracking;
+        AarMotor.Stop();
+        break;
       case 'i':
       case 'I':
         calculateDistance();
+        calculateLineSensors();
         printInfo();
         break;        
     }
+  }
+
+  if (Tracking){
+        LineTracking.Track(0);
+        if(LineTracking.SensorDataLeft() < SENSOR_COLOR_BLACK) {
+        digitalWrite(PIN_MOTOR_LEFT_FORWARD, LOW);
+        AarMotor.RightForward(0);
+    }
+    else {
+       digitalWrite(PIN_MOTOR_RIGHT_FORWARD, LOW);
+    }
+
+    //Serial.print("\t\t");
+
+    if(LineTracking.SensorDataRight() < SENSOR_COLOR_BLACK) {
+        digitalWrite(PIN_MOTOR_RIGHT_FORWARD, LOW);
+        AarMotor.LeftForward(0);
+    }
+    else {
+        digitalWrite(PIN_MOTOR_LEFT_FORWARD, LOW);
+    }
+    LastMovement = millis();
   }
 
   if (millis() - LastMovement >= 500){
